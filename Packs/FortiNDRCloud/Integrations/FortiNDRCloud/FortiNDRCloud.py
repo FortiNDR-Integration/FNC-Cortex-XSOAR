@@ -8,13 +8,12 @@
 
 import json
 from datetime import datetime, timedelta
-from typing import Tuple
 
 import demistomock as demisto
 from CommonServerPython import *
 from CommonServerUserPython import *
-from fnc import FncClient, FncClientError, FncClientLogger
-from fnc.api import ApiContext, EndpointKey, FncApiClient, FncRestClient
+from fnc import FncClient, FncClientLogger
+from fnc.api import EndpointKey, FncApiClient, FncRestClient
 from fnc.errors import ErrorMessages, ErrorType, FncClientError
 
 TRAINING_ACC = "f6f6f836-8bcd-4f5d-bd61-68d303c4f634"
@@ -40,7 +39,7 @@ class FncCortexLogger(FncClientLogger):
 
 
 class FncCortexRestClient(FncRestClient):
-    client: BaseClient = None
+    client: BaseClient
 
     def __init__(self):
         self.client = BaseClient(base_url="ToBeIgnored")
@@ -58,7 +57,7 @@ class FncCortexRestClient(FncRestClient):
                 error_message=ErrorMessages.REQUEST_METHOD_NOT_PROVIDED,
             )
 
-    def send_request(self, req_args: dict = None):
+    def send_request(self, req_args: dict = {}):
         url = req_args["url"]
         method = req_args["method"]
         headers = req_args.get("headers", {})
@@ -494,7 +493,7 @@ def mapSeverity(severity) -> int:
             return 0
 
 
-def getIncidents(result, end_date) -> Tuple[Dict[str, int], List[dict[str, Any]]]:
+def getIncidents(result, end_date) -> tuple[Dict[str, int], List[dict[str, Any]]]:
     # Initialize an empty list of incidents to return
     # Each incident is a dict with a string as a key
     incidents: List[Dict[str, Any]] = []
@@ -536,12 +535,12 @@ def getIncidents(result, end_date) -> Tuple[Dict[str, int], List[dict[str, Any]]
 # Commands Methods
 
 
-def commandTestModule(detectionClient: DetectionClient):
+def commandTestModule(client: FncApiClient):
     """Test that the module is up and running."""
     demisto.info("Testing connection to FortiNDR Cloud Services")
 
     try:
-        commandGetDetections(detectionClient=detectionClient, args={"limit": 1})
+        commandGetSensors(client=client, args={})
         demisto.info("Connection successfully verified.")
         return "ok"
     except Exception as e:
@@ -868,7 +867,7 @@ def commandGetEntityFile(entityClient: EntityClient, hash: str):
 
 def commandFetchIncidents(
     detectionClient: DetectionClient, account_uuid, params, last_run
-) -> Tuple[Dict[str, int], List[dict]]:
+) -> tuple[Dict[str, int], List[dict]]:
     demisto.info("Fetching incidents.")
 
     start_date = getStartDate(params.get("first_fetch"))
@@ -1206,7 +1205,7 @@ def main():
     args: Dict[str, Any] = demisto.args()
 
     # initialize common args
-    api_key = params.get("api_key")
+    api_key = params.get("api_key", '')
     testing = params.get("testing", False)
     account_uuid = params.get("account_uuid")
     domain = params.get("domain", None)
@@ -1240,7 +1239,7 @@ def main():
             fnc_api_Client = fClient
 
         if command == "test-module":
-            return_results(commandTestModule(detectionClient=detectionClient))
+            return_results(commandTestModule(client=fnc_api_Client))
 
         elif command == "fetch-incidents":
             next_run, incidents = commandFetchIncidents(
