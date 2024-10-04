@@ -9,12 +9,13 @@
 import json
 from datetime import datetime, timedelta
 
-import demistomock as demisto
-from CommonServerPython import *
-from CommonServerUserPython import *
 from fnc import FncClient, FncClientLogger
 from fnc.api import EndpointKey, FncApiClient, FncRestClient
 from fnc.errors import ErrorMessages, ErrorType, FncClientError
+
+import demistomock as demisto
+from CommonServerPython import *
+from CommonServerUserPython import *
 
 TRAINING_ACC = "f6f6f836-8bcd-4f5d-bd61-68d303c4f634"
 MAX_DETECTIONS = 10000
@@ -64,8 +65,14 @@ class FncCortexRestClient(FncRestClient):
 
 
 # implement a logger class using FncClientLogger
-class FncCortexLogger(FncClientLogger):
+class FncCortexLoggerCollector(FncClientLogger):
     list_of_logs: list[tuple[str, str]] = []
+
+    def get_logs(self):
+        return self.list_of_logs
+
+    def clear_logs(self):
+        self.list_of_logs.clear()
 
     def info(self, msg):
         info_log = ('info', msg)
@@ -86,9 +93,6 @@ class FncCortexLogger(FncClientLogger):
     def error(self, msg):
         info_log = ('error', msg)
         self.list_of_logs.append(info_log)
-
-
-FncCortexLog = FncCortexLogger()
 
 
 class Client(BaseClient):
@@ -132,11 +136,10 @@ class Client(BaseClient):
             "Content-Type": "application/json",
         }
 
-        match api:
-            case "Detections":
-                return DetectionClient(
-                    base_url=Client.getUrl(api, testing), headers=headers
-                )
+        if api == "Detections":
+            return DetectionClient(
+                base_url=Client.getUrl(api, testing), headers=headers
+            )
 
 
 class DetectionClient(Client):
@@ -218,6 +221,16 @@ class DetectionClient(Client):
 
 # Helper Methods
 
+def flush_logs(logger: FncCortexLoggerCollector):
+    for level, log in logger.get_logs():
+        if level == 'info':
+            demisto.info(log)
+        elif level == 'debug':
+            demisto.debug(log)
+        else:
+            demisto.error(log)
+    logger.clear_logs()
+
 
 def _handle_fnc_endpoint(api_client: FncApiClient, endpoint: EndpointKey, param: dict):
     demisto.info(f"Handling {endpoint.value} Request.")
@@ -227,26 +240,17 @@ def _handle_fnc_endpoint(api_client: FncApiClient, endpoint: EndpointKey, param:
     param.pop("context", None)
 
     response = None
-    exception = None
-    request_summary = {"status": "", "error": "", "info": ""}
 
+    logger: FncCortexLoggerCollector = api_client.get_logger()
     try:
         response = api_client.call_endpoint(endpoint=endpoint, args=param)
-
+        flush_logs(logger=logger)
         demisto.info(f"{endpoint.value} successfully completed.")
-        request_summary.update({"status": "SUCCESS"})
-        request_summary.update({"info": f"{len(response)} items retrieved."})
+        return response
     except FncClientError as e:
+        flush_logs(logger=logger)
         demisto.error(f"{endpoint.value} Request Failed. [{str(e)}]")
-        request_summary.update({"status": "FAILURE"})
-        request_summary.update({"error": str(e)})
-        exception = e
-
-    return {
-        "response": response,
-        "request_summary": request_summary,
-        "exception": exception,
-    }
+        raise e
 
 
 def encodeArgsToURL(args, multiple_values: List = []):
@@ -449,7 +453,7 @@ def commandGetSensors(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Sensors"
     key = "sensors"
@@ -480,7 +484,7 @@ def commandGetDevices(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]["devices"]
+    )["devices"]
 
     prefix = "FortiNDRCloud.Devices"
     key = "device_list"
@@ -518,7 +522,7 @@ def commandGetTasks(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Tasks"
     key = "pcap_task" if taskid != "" else "pcaptasks"
@@ -554,7 +558,7 @@ def commandCreateTask(client: FncApiClient, args):
 
     args["sensor_ids"] = sensor_ids
 
-    result = _handle_fnc_endpoint(api_client=client, endpoint=endpoint, param=args)["response"]
+    result = _handle_fnc_endpoint(api_client=client, endpoint=endpoint, param=args)
 
     if "pcaptask" in result:
 
@@ -573,7 +577,7 @@ def commandGetEventsTelemetry(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Telemetry.Events"
     key = "data"
@@ -608,7 +612,7 @@ def commandGetNetworkTelemetry(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Telemetry.NetworkUsage"
     key = "network_usage"
@@ -639,7 +643,7 @@ def commandGetPacketstatsTelemetry(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Telemetry.Packetstats"
     key = "data"
@@ -672,20 +676,10 @@ def commandGetEntitySummary(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Entity.Summary"
     key = "summary"
-
-    for log in FncCortexLog.list_of_logs:
-        demisto.info("++++++++Log from logger+++++++++")
-        demisto.info("log is => ", log)
-        if log[0] == 'info':
-            demisto.info(log[1])
-        else:
-            demisto.debug(log[1])
-
-        FncCortexLog.list_of_logs.remove(log)
 
     if not result:
         raise Exception(f"We receive an invalid response from the server ({result})")
@@ -713,7 +707,7 @@ def commandGetEntityPdns(client: FncApiClient, args: Dict[str, Any]):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Entity.PDNS"
     key = "passivedns"
@@ -747,7 +741,7 @@ def commandGetEntityDhcp(client: FncApiClient, args: Dict[str, Any]):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Entity.DHCP"
     key = "dhcp"
@@ -784,7 +778,7 @@ def commandGetEntityFile(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Entity.File"
     key = "file"
@@ -931,7 +925,7 @@ def commandGetDetections(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Detections"
     key = "detections"
@@ -962,7 +956,7 @@ def commandGetDetectionEvents(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     events = []
     detection_uuid = args.get("detection_uuid", "")
@@ -1004,7 +998,7 @@ def commandGetDetectionRules(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Rules"
     key = "rules"
@@ -1038,7 +1032,7 @@ def commandGetDetectionRuleEvents(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     prefix = "FortiNDRCloud.Detections"
     key = "events"
@@ -1078,7 +1072,7 @@ def commandCreateDetectionRule(client: FncApiClient, args):
 
     result: Dict[str, Any] = _handle_fnc_endpoint(
         api_client=client, endpoint=endpoint, param=args
-    )["response"]
+    )
 
     if "rule" in result:
 
@@ -1107,7 +1101,7 @@ def commandResolveDetection(client: FncApiClient, args):
 
     detection = args.pop("detection_uuid", "")
     args.update({"detection_id": detection})
-    result = _handle_fnc_endpoint(api_client=client, endpoint=endpoint, param=args)["response"]
+    result = _handle_fnc_endpoint(api_client=client, endpoint=endpoint, param=args)
 
     if not result:
 
@@ -1141,13 +1135,14 @@ def main():
     # attempt command execution
     try:
         restClient = FncCortexRestClient()
+        logger_collector = FncCortexLoggerCollector()
 
         fClient = FncClient.get_api_client(
             name=USER_AGENT,
             api_token=api_key,
             domain=domain,
             rest_client=restClient,
-            logger=FncCortexLog
+            logger=logger_collector
         )
 
         if isinstance(fClient, FncApiClient):
